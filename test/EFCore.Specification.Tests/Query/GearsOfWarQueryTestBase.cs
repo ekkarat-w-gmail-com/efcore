@@ -1308,9 +1308,7 @@ namespace Microsoft.EntityFrameworkCore.Query
             return AssertFirst(
                 async,
                 ss => ss.Set<Weapon>().OrderBy(w => w.Id).Select(
-                    w => new Weapon { IsAutomatic = (bool?)w.SynergyWith.IsAutomatic ?? false }),
-                ss => ss.Set<Weapon>().OrderBy(w => w.Id).Select(
-                    w => new Weapon { IsAutomatic = w.SynergyWith.MaybeScalar(x => x.IsAutomatic) ?? false }));
+                    w => new Weapon { IsAutomatic = (bool?)w.SynergyWith.IsAutomatic ?? false }));
         }
 
         [ConditionalTheory]

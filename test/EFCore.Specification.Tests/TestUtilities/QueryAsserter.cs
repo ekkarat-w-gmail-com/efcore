@@ -41,9 +41,9 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
         }
 
         public override async Task AssertSingleResultTyped<TResult>(
-            Func<ISetSource, TResult> actualSyncQuery,
-            Func<ISetSource, Task<TResult>> actualAsyncQuery,
-            Func<ISetSource, TResult> expectedQuery,
+            Expression<Func<ISetSource, TResult>> actualSyncQuery,
+            Expression<Func<ISetSource, Task<TResult>>> actualAsyncQuery,
+            Expression<Func<ISetSource, TResult>> expectedQuery,
             Action<TResult, TResult> asserter,
             int entryCount,
             bool async,
@@ -54,27 +54,27 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
 
             if (async)
             {
-                actual = await actualAsyncQuery(SetSourceCreator(context));
+                actual = await actualAsyncQuery.Compile()(SetSourceCreator(context));
             }
             else
             {
-                actual = actualSyncQuery(SetSourceCreator(context));
+                actual = actualSyncQuery.Compile()(SetSourceCreator(context));
             }
 
-            var expected = expectedQuery(ExpectedData);
+            var rewrittenExpectedQueryExpression = (Expression<Func<ISetSource, TResult>>)new ExpectedQueryRewritingVisitor().Visit(expectedQuery);
+            var expected = rewrittenExpectedQueryExpression.Compile()(ExpectedData);
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
         }
 
-        private IList<TResult> GetExpectedResults<TResult>(Func<ISetSource, IQueryable<TResult>> expectedQueryFunc)
+        private IQueryable<TResult> GetExpectedResults<TResult>(Func<ISetSource, IQueryable<TResult>> expectedQueryFunc)
         {
             var expectedQuery = expectedQueryFunc(ExpectedData);
             var expectedQueryExpression = expectedQuery.Expression;
             var rewrittenExpectedQueryExpression = new ExpectedQueryRewritingVisitor().Visit(expectedQueryExpression);
-            var newExpectedQuery = expectedQuery.Provider.CreateQuery<TResult>(rewrittenExpectedQueryExpression);
 
-            return newExpectedQuery.ToList();
+            return expectedQuery.Provider.CreateQuery<TResult>(rewrittenExpectedQueryExpression);
         }
 
         public override async Task AssertQuery<TResult>(
@@ -104,7 +104,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
 
             AssertRogueExecution(actual.Count, query);
 
-            var expected = GetExpectedResults(expectedQuery);
+            var expected = GetExpectedResults(expectedQuery).ToList();
 
             if (!assertOrder
                 && elementSorter == null)
@@ -174,7 +174,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
 
             AssertRogueExecution(actual.Count, query);
 
-            var expected = GetExpectedResults(expectedQuery);
+            var expected = GetExpectedResults(expectedQuery).ToList();
 
             TestHelpers.AssertResults(
                 expected,
@@ -209,7 +209,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
 
             AssertRogueExecution(actual.Count, query);
 
-            var expected = GetExpectedResults(expectedQuery);
+            var expected = GetExpectedResults(expectedQuery).ToList();
 
             TestHelpers.AssertResults(
                 expected,
@@ -247,7 +247,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
 
             AssertRogueExecution(actual.Count, query);
 
-            var expected = GetExpectedResults(expectedQuery);
+            var expected = GetExpectedResults(expectedQuery).ToList();
 
             if (!assertOrder
                 && elementSorter == null)
@@ -294,7 +294,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AnyAsync()
                 : actualQuery(SetSourceCreator(context)).Any();
 
-            var expected = expectedQuery(ExpectedData).Any();
+            var expected = GetExpectedResults(expectedQuery).Any();
 
             Assert.Equal(expected, actual);
         }
@@ -312,7 +312,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                     ? await actualQuery(SetSourceCreator(context)).AnyAsync(actualPredicate)
                     : actualQuery(SetSourceCreator(context)).Any(actualPredicate);
 
-                var expected = expectedQuery(ExpectedData).Any(expectedPredicate);
+                var rewrittenExpectedPredicate = (Expression<Func<TResult, bool>>)new ExpectedQueryRewritingVisitor().Visit(expectedPredicate);
+                var expected = GetExpectedResults(expectedQuery).Any(rewrittenExpectedPredicate);
 
                 Assert.Equal(expected, actual);
             }
@@ -341,7 +342,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AllAsync(actualPredicate)
                 : actualQuery(SetSourceCreator(context)).All(actualPredicate);
 
-            var expected = expectedQuery(ExpectedData).All(expectedPredicate);
+            var rewrittenExpectedPredicate = (Expression<Func<TResult, bool>>)new ExpectedQueryRewritingVisitor().Visit(expectedPredicate);
+            var expected = GetExpectedResults(expectedQuery).All(rewrittenExpectedPredicate);
 
             Assert.Equal(expected, actual);
         }
@@ -358,7 +360,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).FirstAsync()
                 : actualQuery(SetSourceCreator(context)).First();
 
-            var expected = expectedQuery(ExpectedData).First();
+            var expected = GetExpectedResults(expectedQuery).First();
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -367,18 +369,19 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
         public override async Task AssertFirst<TResult>(
             Func<ISetSource, IQueryable<TResult>> actualQuery,
             Func<ISetSource, IQueryable<TResult>> expectedQuery,
-            Expression<Func<TResult, bool>> actualFirstPredicate,
-            Expression<Func<TResult, bool>> expectedFirstPredicate,
+            Expression<Func<TResult, bool>> actualPredicate,
+            Expression<Func<TResult, bool>> expectedPredicate,
             Action<TResult, TResult> asserter = null,
             int entryCount = 0,
             bool async = false)
         {
             using var context = _contextCreator();
             var actual = async
-                ? await actualQuery(SetSourceCreator(context)).FirstAsync(actualFirstPredicate)
-                : actualQuery(SetSourceCreator(context)).First(actualFirstPredicate);
+                ? await actualQuery(SetSourceCreator(context)).FirstAsync(actualPredicate)
+                : actualQuery(SetSourceCreator(context)).First(actualPredicate);
 
-            var expected = expectedQuery(ExpectedData).First(expectedFirstPredicate);
+            var rewrittenExpectedPredicate = (Expression<Func<TResult, bool>>)new ExpectedQueryRewritingVisitor().Visit(expectedPredicate);
+            var expected = GetExpectedResults(expectedQuery).First(rewrittenExpectedPredicate);
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -396,7 +399,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).FirstOrDefaultAsync()
                 : actualQuery(SetSourceCreator(context)).FirstOrDefault();
 
-            var expected = expectedQuery(ExpectedData).FirstOrDefault();
+            var expected = GetExpectedResults(expectedQuery).FirstOrDefault();
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -416,7 +419,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).FirstOrDefaultAsync(actualPredicate)
                 : actualQuery(SetSourceCreator(context)).FirstOrDefault(actualPredicate);
 
-            var expected = expectedQuery(ExpectedData).FirstOrDefault(expectedPredicate);
+            var rewrittenExpectedPredicate = (Expression<Func<TResult, bool>>)new ExpectedQueryRewritingVisitor().Visit(expectedPredicate);
+            var expected = GetExpectedResults(expectedQuery).FirstOrDefault(rewrittenExpectedPredicate);
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -434,7 +438,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SingleAsync()
                 : actualQuery(SetSourceCreator(context)).Single();
 
-            var expected = expectedQuery(ExpectedData).Single();
+            var expected = GetExpectedResults(expectedQuery).Single();
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -443,18 +447,19 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
         public override async Task AssertSingle<TResult>(
             Func<ISetSource, IQueryable<TResult>> actualQuery,
             Func<ISetSource, IQueryable<TResult>> expectedQuery,
-            Expression<Func<TResult, bool>> actualFirstPredicate,
-            Expression<Func<TResult, bool>> expectedFirstPredicate,
+            Expression<Func<TResult, bool>> actualPredicate,
+            Expression<Func<TResult, bool>> expectedPredicate,
             Action<TResult, TResult> asserter = null,
             int entryCount = 0,
             bool async = false)
         {
             using var context = _contextCreator();
             var actual = async
-                ? await actualQuery(SetSourceCreator(context)).SingleAsync(actualFirstPredicate)
-                : actualQuery(SetSourceCreator(context)).Single(actualFirstPredicate);
+                ? await actualQuery(SetSourceCreator(context)).SingleAsync(actualPredicate)
+                : actualQuery(SetSourceCreator(context)).Single(actualPredicate);
 
-            var expected = expectedQuery(ExpectedData).Single(expectedFirstPredicate);
+            var rewrittenExpectedPredicate = (Expression<Func<TResult, bool>>)new ExpectedQueryRewritingVisitor().Visit(expectedPredicate);
+            var expected = GetExpectedResults(expectedQuery).Single(rewrittenExpectedPredicate);
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -472,7 +477,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SingleOrDefaultAsync()
                 : actualQuery(SetSourceCreator(context)).SingleOrDefault();
 
-            var expected = expectedQuery(ExpectedData).SingleOrDefault();
+            var expected = GetExpectedResults(expectedQuery).SingleOrDefault();
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -492,7 +497,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SingleOrDefaultAsync(actualPredicate)
                 : actualQuery(SetSourceCreator(context)).SingleOrDefault(actualPredicate);
 
-            var expected = expectedQuery(ExpectedData).SingleOrDefault(expectedPredicate);
+            var rewrittenExpectedPredicate = (Expression<Func<TResult, bool>>)new ExpectedQueryRewritingVisitor().Visit(expectedPredicate);
+            var expected = GetExpectedResults(expectedQuery).SingleOrDefault(rewrittenExpectedPredicate);
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -510,7 +516,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).LastAsync()
                 : actualQuery(SetSourceCreator(context)).Last();
 
-            var expected = expectedQuery(ExpectedData).Last();
+            var expected = GetExpectedResults(expectedQuery).Last();
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -530,7 +536,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).LastAsync(actualPredicate)
                 : actualQuery(SetSourceCreator(context)).Last(actualPredicate);
 
-            var expected = expectedQuery(ExpectedData).Last(expectedPredicate);
+            var rewrittenExpectedPredicate = (Expression<Func<TResult, bool>>)new ExpectedQueryRewritingVisitor().Visit(expectedPredicate);
+            var expected = GetExpectedResults(expectedQuery).Last(rewrittenExpectedPredicate);
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -548,7 +555,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).LastOrDefaultAsync()
                 : actualQuery(SetSourceCreator(context)).LastOrDefault();
 
-            var expected = expectedQuery(ExpectedData).LastOrDefault();
+            var expected = GetExpectedResults(expectedQuery).LastOrDefault();
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -568,7 +575,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).LastOrDefaultAsync(actualPredicate)
                 : actualQuery(SetSourceCreator(context)).LastOrDefault(actualPredicate);
 
-            var expected = expectedQuery(ExpectedData).LastOrDefault(expectedPredicate);
+            var rewrittenExpectedPredicate = (Expression<Func<TResult, bool>>)new ExpectedQueryRewritingVisitor().Visit(expectedPredicate);
+            var expected = GetExpectedResults(expectedQuery).LastOrDefault(rewrittenExpectedPredicate);
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -584,7 +592,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).CountAsync()
                 : actualQuery(SetSourceCreator(context)).Count();
 
-            var expected = expectedQuery(ExpectedData).Count();
+            var expected = GetExpectedResults(expectedQuery).Count();
 
             Assert.Equal(expected, actual);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -602,7 +610,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).CountAsync(actualPredicate)
                 : actualQuery(SetSourceCreator(context)).Count(actualPredicate);
 
-            var expected = expectedQuery(ExpectedData).Count(expectedPredicate);
+            var rewrittenExpectedPredicate = (Expression<Func<TResult, bool>>)new ExpectedQueryRewritingVisitor().Visit(expectedPredicate);
+            var expected = GetExpectedResults(expectedQuery).Count(rewrittenExpectedPredicate);
 
             Assert.Equal(expected, actual);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -618,7 +627,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).LongCountAsync()
                 : actualQuery(SetSourceCreator(context)).LongCount();
 
-            var expected = expectedQuery(ExpectedData).LongCount();
+            var expected = GetExpectedResults(expectedQuery).LongCount();
 
             Assert.Equal(expected, actual);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -636,7 +645,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).LongCountAsync(actualPredicate)
                 : actualQuery(SetSourceCreator(context)).LongCount(actualPredicate);
 
-            var expected = expectedQuery(ExpectedData).LongCount(expectedPredicate);
+            var rewrittenExpectedPredicate = (Expression<Func<TResult, bool>>)new ExpectedQueryRewritingVisitor().Visit(expectedPredicate);
+            var expected = GetExpectedResults(expectedQuery).LongCount(rewrittenExpectedPredicate);
 
             Assert.Equal(expected, actual);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -654,7 +664,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).MinAsync()
                 : actualQuery(SetSourceCreator(context)).Min();
 
-            var expected = expectedQuery(ExpectedData).Min();
+            var expected = GetExpectedResults(expectedQuery).Min();
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -674,7 +684,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).MinAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Min(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Min(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, TSelector>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Min(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -692,7 +703,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).MaxAsync()
                 : actualQuery(SetSourceCreator(context)).Max();
 
-            var expected = expectedQuery(ExpectedData).Max();
+            var expected = GetExpectedResults(expectedQuery).Max();
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -712,7 +723,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).MaxAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Max(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Max(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, TSelector>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Max(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Equal(entryCount, context.ChangeTracker.Entries().Count());
@@ -729,7 +741,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync()
                 : actualQuery(SetSourceCreator(context)).Sum();
 
-            var expected = expectedQuery(ExpectedData).Sum();
+            var expected = GetExpectedResults(expectedQuery).Sum();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -746,7 +758,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync()
                 : actualQuery(SetSourceCreator(context)).Sum();
 
-            var expected = expectedQuery(ExpectedData).Sum();
+            var expected = GetExpectedResults(expectedQuery).Sum();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -763,7 +775,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync()
                 : actualQuery(SetSourceCreator(context)).Sum();
 
-            var expected = expectedQuery(ExpectedData).Sum();
+            var expected = GetExpectedResults(expectedQuery).Sum();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -780,7 +792,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync()
                 : actualQuery(SetSourceCreator(context)).Sum();
 
-            var expected = expectedQuery(ExpectedData).Sum();
+            var expected = GetExpectedResults(expectedQuery).Sum();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -797,7 +809,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync()
                 : actualQuery(SetSourceCreator(context)).Sum();
 
-            var expected = expectedQuery(ExpectedData).Sum();
+            var expected = GetExpectedResults(expectedQuery).Sum();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -814,7 +826,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync()
                 : actualQuery(SetSourceCreator(context)).Sum();
 
-            var expected = expectedQuery(ExpectedData).Sum();
+            var expected = GetExpectedResults(expectedQuery).Sum();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -831,7 +843,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync()
                 : actualQuery(SetSourceCreator(context)).Sum();
 
-            var expected = expectedQuery(ExpectedData).Sum();
+            var expected = GetExpectedResults(expectedQuery).Sum();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -848,7 +860,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync()
                 : actualQuery(SetSourceCreator(context)).Sum();
 
-            var expected = expectedQuery(ExpectedData).Sum();
+            var expected = GetExpectedResults(expectedQuery).Sum();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -865,7 +877,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync()
                 : actualQuery(SetSourceCreator(context)).Sum();
 
-            var expected = expectedQuery(ExpectedData).Sum();
+            var expected = GetExpectedResults(expectedQuery).Sum();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -882,7 +894,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync()
                 : actualQuery(SetSourceCreator(context)).Sum();
 
-            var expected = expectedQuery(ExpectedData).Sum();
+            var expected = GetExpectedResults(expectedQuery).Sum();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -901,7 +913,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Sum(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Sum(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, int>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Sum(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -920,7 +933,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Sum(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Sum(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, int?>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Sum(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -939,7 +953,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Sum(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Sum(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, long>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Sum(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -958,7 +973,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Sum(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Sum(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, long?>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Sum(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -977,7 +993,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Sum(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Sum(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, decimal>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Sum(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -996,7 +1013,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Sum(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Sum(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, decimal?>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Sum(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1015,7 +1033,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Sum(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Sum(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, float>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Sum(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1034,7 +1053,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Sum(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Sum(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, float?>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Sum(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1053,7 +1073,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Sum(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Sum(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, double>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Sum(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1072,7 +1093,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).SumAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Sum(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Sum(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, double?>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Sum(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1089,7 +1111,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync()
                 : actualQuery(SetSourceCreator(context)).Average();
 
-            var expected = expectedQuery(ExpectedData).Average();
+            var expected = GetExpectedResults(expectedQuery).Average();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1106,7 +1128,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync()
                 : actualQuery(SetSourceCreator(context)).Average();
 
-            var expected = expectedQuery(ExpectedData).Average();
+            var expected = GetExpectedResults(expectedQuery).Average();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1123,7 +1145,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync()
                 : actualQuery(SetSourceCreator(context)).Average();
 
-            var expected = expectedQuery(ExpectedData).Average();
+            var expected = GetExpectedResults(expectedQuery).Average();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1140,7 +1162,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync()
                 : actualQuery(SetSourceCreator(context)).Average();
 
-            var expected = expectedQuery(ExpectedData).Average();
+            var expected = GetExpectedResults(expectedQuery).Average();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1157,7 +1179,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync()
                 : actualQuery(SetSourceCreator(context)).Average();
 
-            var expected = expectedQuery(ExpectedData).Average();
+            var expected = GetExpectedResults(expectedQuery).Average();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1174,7 +1196,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync()
                 : actualQuery(SetSourceCreator(context)).Average();
 
-            var expected = expectedQuery(ExpectedData).Average();
+            var expected = GetExpectedResults(expectedQuery).Average();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1191,7 +1213,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync()
                 : actualQuery(SetSourceCreator(context)).Average();
 
-            var expected = expectedQuery(ExpectedData).Average();
+            var expected = GetExpectedResults(expectedQuery).Average();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1208,7 +1230,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync()
                 : actualQuery(SetSourceCreator(context)).Average();
 
-            var expected = expectedQuery(ExpectedData).Average();
+            var expected = GetExpectedResults(expectedQuery).Average();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1225,7 +1247,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync()
                 : actualQuery(SetSourceCreator(context)).Average();
 
-            var expected = expectedQuery(ExpectedData).Average();
+            var expected = GetExpectedResults(expectedQuery).Average();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1242,7 +1264,7 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync()
                 : actualQuery(SetSourceCreator(context)).Average();
 
-            var expected = expectedQuery(ExpectedData).Average();
+            var expected = GetExpectedResults(expectedQuery).Average();
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1261,7 +1283,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Average(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Average(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, int>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Average(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1280,7 +1303,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Average(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Average(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, int?>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Average(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1299,7 +1323,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Average(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Average(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, long>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Average(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1318,7 +1343,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Average(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Average(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, long?>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Average(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1337,7 +1363,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Average(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Average(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, decimal>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Average(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1356,7 +1383,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Average(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Average(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, decimal?>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Average(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1375,7 +1403,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Average(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Average(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, float>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Average(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1394,7 +1423,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Average(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Average(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, float?>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Average(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1413,7 +1443,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Average(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Average(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, double>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Average(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
@@ -1432,7 +1463,8 @@ namespace Microsoft.EntityFrameworkCore.TestUtilities
                 ? await actualQuery(SetSourceCreator(context)).AverageAsync(actualSelector)
                 : actualQuery(SetSourceCreator(context)).Average(actualSelector);
 
-            var expected = expectedQuery(ExpectedData).Average(expectedSelector);
+            var rewrittenExpectedSelector = (Expression<Func<TResult, double?>>)new ExpectedQueryRewritingVisitor().Visit(expectedSelector);
+            var expected = GetExpectedResults(expectedQuery).Average(rewrittenExpectedSelector);
 
             AssertEqual(expected, actual, asserter);
             Assert.Empty(context.ChangeTracker.Entries());
